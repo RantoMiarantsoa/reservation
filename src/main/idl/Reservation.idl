@@ -1,0 +1,33 @@
+module GestionReservation {
+
+  
+    exception VolIntrouvable {
+    string volId;
+};
+
+
+   
+
+    struct Vol {
+        string idVol;
+        string companie;
+        string lieuDepart;
+        string lieuArrivee;
+        string dateDepart;
+        string dateArrivee;
+        double prixBase;
+    };
+    typedef sequence<Vol> ListeVols;
+
+
+
+interface Booking {
+ 
+    
+    ListeVols getListeVols() raises (VolIntrouvable);
+
+   
+
+
+};
+};

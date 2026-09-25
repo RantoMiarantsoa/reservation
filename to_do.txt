@@ -1,0 +1,163 @@
+TODO LISTE DU PROJET
+Systeme de reservation de vols - CORBA (Client Java + Serveur C++ + MySQL)
+Module IDL : GestionReservation
+
+============================================================
+PHASE 0 - FINALISER LE CONTRAT IDL
+============================================================
+
+[x] Trancher la question vol vs avion
+    -> retirer avionId de getListeSiege si un siege appartient
+       au vol, pas a l'avion physique
+
+[x] Ajouter l'exception VolIntrouvable
+    -> l'utiliser en "raises" sur getListeSiege et reserverUnVol
+
+[x] Decider si reserverUnVol doit accepter plusieurs sieges
+    (sequence<string>) ou un seul (string)
+    -> garder "string" est tres bien pour une V1 simple
+
+[x] Compiler l'IDL des deux cotes pour valider la syntaxe :
+        omniidl -bcxx GestionReservation.idl
+        idlj -fall GestionReservation.idl
+
+
+============================================================
+PHASE 1 - INSTALLER L'ENVIRONNEMENT
+============================================================
+
+[x] sudo apt-get install omniorb-nameserver libomniorb4-dev \
+        omniidl build-essential
+
+[x] Installer MySQL Server + MySQL Connector/C++
+    (libmysqlcppconn-dev)
+
+[x] Installer JDK 11+ et JacORB
+    (l'ORB n'est plus fourni avec le JDK depuis Java 11)
+
+
+============================================================
+PHASE 2 - BASE DE DONNEES
+============================================================
+
+[x] Executer schema_vol.sql (ou la version adaptee au module
+    Booking / GestionReservation) sur MySQL
+
+[x] Verifier avec un client MySQL en ligne de commande que les
+    tables et les donnees de demo sont bien creees
+
+[x] Creer un utilisateur MySQL dedie au serveur C++ (pas root)
+    avec les droits minimums necessaires
+
+
+============================================================
+PHASE 3 - SERVEUR D'APPLICATION C++
+============================================================
+
+[x] Ecrire Database.h / Database.cpp
+    -> connexion MySQL + methodes (listVols(), listSieges(),
+       reserveSiege(), etc.)
+
+[x] Ecrire BookingServer_i.h / BookingServer_i.cpp (le servant)
+    -> une methode C++ par methode de l'interface Booking
+
+[ ] Implementer le verrouillage
+    -> un std::mutex par volId, pris AVANT toute transaction
+       MySQL sur ce vol
+
+[ ] Implementer reserverUnVol avec transaction complete :
+        START TRANSACTION
+        -> verification du siege
+        -> UPDATE / INSERT
+        COMMIT ou ROLLBACK
+
+[ ] Ecrire server_main.cpp
+    -> init ORB/POA, enregistrement dans le Naming Service
+
+[ ] Adapter le Makefile
+    -> lien avec la librairie MySQL Connector/C++
+
+[ ] Tester le serveur SEUL, sans client Java
+    -> petit programme C++ de test qui appelle directement
+       Database, pour valider la logique SQL en isolation
+
+
+============================================================
+PHASE 4 - CLIENT JAVA
+============================================================
+
+[ ] Generer les classes a partir de l'IDL :
+        idlj -fall GestionReservation.idl
+
+[ ] Ecrire l'interface Swing :
+    liste des vols -> liste des sieges -> selection ->
+    reservation -> paiement
+
+[ ] Gerer les exceptions IDL cote GUI
+    (PlaceReserver, SoldeInsuffisant, VolIntrouvable)
+
+[ ] Ajouter le fichier texte local (historique_local.txt)
+    -> garder trace du reservationId genere apres chaque
+       reservation, en attendant le paiement
+
+
+============================================================
+PHASE 5 - INTEGRATION ET TESTS
+============================================================
+
+[ ] Lancer omniNames, puis le serveur C++, puis le client Java
+    -> tester le flux complet une premiere fois
+
+[ ] Test de concurrence
+    -> lancer 2-3 clients Java en parallele, tenter de
+       reserver le MEME siege en meme temps
+    -> un seul doit reussir, les autres recoivent
+       PlaceReserver
+
+[ ] Test de persistance
+    -> arreter/relancer le serveur, verifier que les
+       reservations existantes sont toujours la
+
+[ ] Test d'annulation
+    -> verifier que le siege redevient LIBRE en base apres
+       annulerReservation
+
+[ ] Test du paiement
+    -> verifier SoldeInsuffisant avec un solde
+       volontairement insuffisant
+
+
+============================================================
+PHASE 6 - DOCUMENTATION ET SOUTENANCE
+============================================================
+
+[ ] Mettre a jour le README.md avec les instructions de
+    build/run finales
+
+[ ] Preparer une demo live de la concurrence
+    (partie la plus interessante a montrer au jury)
+
+[ ] Documenter l'architecture (schema deja fait) pour la
+    presentation
+
+
+============================================================
+PHASE 7 - EXTENSIONS (SI LE TEMPS LE PERMET)
+============================================================
+
+[ ] Remplacer le verrouillage manuel par le CORBA Transaction
+    Service (OTS)
+
+[ ] Ajouter le Notification Service pour pousser en temps
+    reel les sieges devenus indisponibles a tous les clients
+    connectes
+
+
+============================================================
+ETAT ACTUEL DU PROJET
+============================================================
+
+Phase 0 presque terminee : l'IDL est quasiment finalise,
+il reste a trancher la question vol/avion et a ajouter
+l'exception VolIntrouvable avant de passer a la Phase 3
+(ecriture de Database.h/.cpp).

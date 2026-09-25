@@ -1,0 +1,194 @@
+EXPLICATION DU PROJET
+Systeme de reservation de vols - CORBA (Client Java + Serveur C++ + MySQL)
+
+============================================================
+1. QUE FAIT LE PROJET ?
+============================================================
+
+Le projet simule une billetterie de vols d'avion.
+
+Un utilisateur, via une interface graphique Java, peut :
+- consulter la liste des vols disponibles
+- consulter les sieges libres d'un vol
+- reserver un ou plusieurs sieges
+- simuler un paiement
+- annuler une reservation
+
+Toute la logique metier (disponibilite, verrouillage, transactions)
+est geree par un serveur d'application ecrit en C++, qui est le
+SEUL composant a parler directement a la base de donnees MySQL.
+
+Le client Java ne fait AUCUNE requete SQL. Il ne connait meme pas
+l'existence de MySQL. Il connait uniquement les operations definies
+dans le fichier IDL (Vol.idl / Booking.idl).
+
+
+============================================================
+2. ARCHITECTURE GENERALE
+============================================================
+
+    +------------------------+
+    |   CLIENT JAVA (Swing)   |
+    |                          |
+    |  - Interface graphique  |
+    |  - fichier texte local  |
+    |    (historique, brouillons)
+    +-----------+--------------+
+                |
+                | Appel CORBA (IDL / IIOP)
+                v
+    +------------------------+
+    |  SERVEUR C++ (omniORB)  |
+    |                          |
+    |  - Logique metier        |
+    |  - Verrouillage par vol  |
+    |  - Gestion transactions  |
+    +-----------+--------------+
+                |
+                | Requetes SQL
+                v
+    +------------------------+
+    |         MySQL           |
+    |  vol, siege, reservation|
+    |  paiement...             |
+    +------------------------+
+
+
+Deux "bases de stockage" distinctes cohabitent dans ce projet,
+et elles n'ont PAS le meme role :
+
+  - Le fichier texte (cote Java) = confort LOCAL, cote client
+  - MySQL (cote C++)             = verite OFFICIELLE, cote serveur
+
+Ces deux stockages ne communiquent JAMAIS directement entre eux.
+Le seul pont entre le monde Java et le monde C++ est le contrat
+IDL, transporte par le protocole IIOP (voir section 5).
+
+
+============================================================
+3. OU ET POURQUOI JAVA UTILISE UN FICHIER TEXTE
+============================================================
+
+Le client Java peut garder un petit fichier texte LOCAL, par
+exemple "historique_local.txt", pour des besoins purement cote
+utilisateur, jamais pour stocker les donnees officielles :
+
+Exemples d'usage legitime du fichier texte cote Java :
+
+  a) Historique personnel de l'utilisateur
+     -> garder une trace des reservations qu'IL a faites
+        sur CETTE machine, pour un affichage rapide sans
+        redemander au serveur.
+
+  b) Brouillon de reservation en cours
+     -> si l'utilisateur selectionne des sieges mais n'a pas
+        encore clique sur "Reserver", on peut sauvegarder ce
+        choix temporaire dans un fichier texte, au cas ou
+        l'application redemarre.
+
+  c) Preferences locales
+     -> derniere ville de depart recherchee, langue choisie,
+        format d'affichage, etc.
+
+  d) Journal de debogage cote client
+     -> log des erreurs de connexion CORBA rencontrees,
+        utile pour le developpeur pendant les tests.
+
+CE QUE LE FICHIER TEXTE JAVA NE DOIT JAMAIS FAIRE :
+
+  - stocker l'etat REEL d'un siege (libre/reserve) : cette
+    information vit UNIQUEMENT dans MySQL, cote serveur.
+  - servir de source de verite en cas de conflit : si le
+    fichier texte dit "siege 12A reserve" mais que le serveur
+    dit "12A libre", c'est TOUJOURS le serveur qui a raison.
+  - etre lu par un autre client Java : chaque instance du
+    client a SON PROPRE fichier texte, invisible des autres.
+
+En clair : le fichier texte est une memoire de confort, cote
+client, jetable et non partagee. Le systeme fonctionnerait
+encore correctement si on le supprimait completement.
+
+
+============================================================
+4. OU ET POURQUOI C++ UTILISE MYSQL
+============================================================
+
+Le serveur C++ est le gardien unique des donnees officielles.
+Toutes les tables definies dans schema_vol.sql vivent dans
+MySQL, et SEUL le serveur C++ y accede :
+
+  - utilisateur          -> qui reserve
+  - vol                   -> quels vols existent
+  - siege                 -> quels sieges, quel statut
+  - reservation           -> qui a reserve quoi
+  - reservation_siege     -> quels sieges par reservation
+  - paiement              -> paiement simule
+
+Pourquoi c'est important que MySQL soit cote C++ uniquement :
+
+  a) Coherence : si plusieurs clients Java reservaient
+     directement en base sans passer par le serveur, deux
+     clients pourraient reserver le meme siege en meme temps
+     (race condition). En centralisant l'ecriture dans le
+     serveur C++, on peut proteger chaque vol avec un verrou
+     (std::mutex) avant de toucher MySQL.
+
+  b) Transactions : le serveur C++ utilise START TRANSACTION /
+     COMMIT / ROLLBACK autour de la reservation + du paiement,
+     pour garantir qu'une reservation n'est jamais "a moitie"
+     enregistree (soit tout reussit, soit rien n'est modifie).
+
+  c) Securite : les identifiants MySQL (utilisateur, mot de
+     passe de connexion) ne sont connus que du serveur C++,
+     jamais exposes au client Java.
+
+Flux typique d'une reservation, cote C++ :
+
+  1. reserveSeats() est appele via CORBA
+  2. le serveur verrouille le vol concerne (mutex applicatif)
+  3. SELECT ... FOR UPDATE sur les sieges demandes (MySQL)
+  4. verification : tous les sieges sont-ils LIBRE ?
+  5. si oui : UPDATE siege SET statut='RESERVE', INSERT INTO
+     reservation, INSERT INTO reservation_siege
+  6. COMMIT
+  7. le serveur deverrouille le vol
+  8. la reference de reservation est renvoyee au client Java
+
+
+============================================================
+5. COMMENT JAVA ET C++ COMMUNIQUENT (RAPPEL)
+============================================================
+
+Java et C++ ne s'appellent jamais directement. Ils passent
+tous les deux par le meme contrat : le fichier .idl.
+
+  Vol.idl
+     |
+     +--> compile par idlj    --> classes Java (stub)
+     +--> compile par omniidl --> classes C++ (skeleton)
+
+Quand le client Java appelle reserveSeats(...) :
+
+  1. Le stub Java serialise l'appel au format IIOP (binaire,
+     independant du langage)
+  2. Le message part en TCP/IP vers le serveur C++
+  3. Le skeleton C++ desserialise le message et appelle la
+     vraie fonction C++ du servant
+  4. Le servant C++ execute la logique (section 4 ci-dessus)
+  5. Le resultat repart en sens inverse (C++ -> IIOP -> Java)
+
+A aucun moment le client Java ne voit du SQL, et a aucun
+moment le serveur C++ ne voit le fichier texte du client.
+Chacun ignore totalement comment l'autre stocke ses donnees
+locales : c'est le principe d'encapsulation garanti par CORBA.
+
+
+============================================================
+6. RESUME EN UNE PHRASE
+============================================================
+
+Le client Java gere l'AFFICHAGE et un CONFORT LOCAL (fichier
+texte, jetable, non partage) ; le serveur C++ gere la VERITE
+OFFICIELLE et la CONCURRENCE (MySQL, transactions, verrous) ;
+et le fichier Vol.idl est le seul langage commun qui permet
+aux deux mondes de se comprendre sans jamais se voir.
